@@ -3,7 +3,15 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
-import { readDb, writeDb, getRoomById, sanitizeRoom } from './db.js';
+import {
+  readDb,
+  writeDb,
+  getRoomById,
+  sanitizeRoom,
+  normalizeBlockedDates,
+  blockedDateSet,
+  blockedReasonMap,
+} from './db.js';
 import {
   getDateRange,
   datesOverlap,
@@ -66,13 +74,32 @@ function getBookingOccupiedDates(roomId, excludeBookingId) {
 function getBlockedDates(roomId) {
   const db = readDb();
   const room = getRoomById(db, roomId);
-  return new Set(room?.blockedDates || []);
+  return blockedDateSet(room?.blockedDates);
 }
 
 function getUnavailableDates(roomId, excludeBookingId) {
   const bookingDates = getBookingOccupiedDates(roomId, excludeBookingId);
   const blocked = getBlockedDates(roomId);
   return { bookingDates, blocked, all: new Set([...bookingDates, ...blocked]) };
+}
+
+/** Upsert blocked date entries; apply optional shared reason per plan rules. */
+function upsertBlockedDates(existing, dates, reason) {
+  const byDate = new Map(normalizeBlockedDates(existing).map((e) => [e.date, { ...e }]));
+
+  for (const date of dates) {
+    const current = byDate.get(date) || { date };
+    if (reason === undefined) {
+      byDate.set(date, current);
+    } else if (reason === '') {
+      const cleared = { date };
+      byDate.set(date, cleared);
+    } else {
+      byDate.set(date, { date, reason });
+    }
+  }
+
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function getDateReason(dateStr, bookingDates, blocked) {
@@ -164,6 +191,7 @@ app.get('/api/rooms/:id/availability', (req, res) => {
   }
 
   const { bookingDates, blocked, all: unavailable } = getUnavailableDates(room.id);
+  const reasonByDate = blockedReasonMap(room.blockedDates);
   const today = startOfToday();
   const rangeDates = getDateRange(String(startDate), String(endDate));
 
@@ -171,14 +199,19 @@ app.get('/api/rooms/:id/availability', (req, res) => {
     const date = parseDate(dateStr);
     const isPast = date < today;
     const isUnavailable = unavailable.has(dateStr);
-    return {
+    const isBlocked = blocked.has(dateStr);
+    const day = {
       date: dateStr,
       available: !isPast && !isUnavailable,
       occupied: isUnavailable,
-      blocked: blocked.has(dateStr),
+      blocked: isBlocked,
       expired: isPast,
       reason: getDateReason(dateStr, bookingDates, blocked),
     };
+    if (isBlocked && reasonByDate.has(dateStr)) {
+      day.blockReason = reasonByDate.get(dateStr);
+    }
+    return day;
   });
 
   res.json({
@@ -193,13 +226,19 @@ app.get('/api/rooms/:id/blocked-dates', adminAuthMiddleware, (req, res) => {
   const db = readDb();
   const room = getRoomById(db, req.params.id);
   if (!room) return res.status(404).json({ error: '房间不存在' });
-  res.json({ roomId: room.id, blockedDates: room.blockedDates || [] });
+  res.json({
+    roomId: room.id,
+    blockedDates: normalizeBlockedDates(room.blockedDates),
+  });
 });
 
 app.post('/api/rooms/:id/blocked-dates', adminAuthMiddleware, (req, res) => {
-  const { dates } = req.body;
+  const { dates, reason } = req.body;
   if (!Array.isArray(dates) || dates.length === 0) {
     return res.status(400).json({ error: '请提供 dates 数组' });
+  }
+  if (reason !== undefined && typeof reason !== 'string') {
+    return res.status(400).json({ error: 'reason 必须是字符串' });
   }
 
   const today = startOfToday();
@@ -215,9 +254,7 @@ app.post('/api/rooms/:id/blocked-dates', adminAuthMiddleware, (req, res) => {
   const room = getRoomById(db, req.params.id);
   if (!room) return res.status(404).json({ error: '房间不存在' });
 
-  const set = new Set(room.blockedDates || []);
-  dates.forEach((d) => set.add(d));
-  room.blockedDates = [...set].sort();
+  room.blockedDates = upsertBlockedDates(room.blockedDates, dates, reason);
   writeDb(db);
 
   res.json({ roomId: room.id, blockedDates: room.blockedDates });
@@ -234,7 +271,9 @@ app.delete('/api/rooms/:id/blocked-dates', adminAuthMiddleware, (req, res) => {
   if (!room) return res.status(404).json({ error: '房间不存在' });
 
   const remove = new Set(dates);
-  room.blockedDates = (room.blockedDates || []).filter((d) => !remove.has(d));
+  room.blockedDates = normalizeBlockedDates(room.blockedDates).filter(
+    (entry) => !remove.has(entry.date),
+  );
   writeDb(db);
 
   res.json({ roomId: room.id, blockedDates: room.blockedDates });

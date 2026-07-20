@@ -24,6 +24,41 @@ const DEFAULT_DATA = {
   },
 };
 
+/** Normalize legacy `string[]` or mixed entries to `{ date, reason? }[]`. */
+export function normalizeBlockedDates(blockedDates) {
+  if (!Array.isArray(blockedDates)) return [];
+
+  const byDate = new Map();
+  for (const entry of blockedDates) {
+    if (typeof entry === 'string') {
+      if (!entry) continue;
+      if (!byDate.has(entry)) byDate.set(entry, { date: entry });
+      continue;
+    }
+    if (entry && typeof entry === 'object' && typeof entry.date === 'string' && entry.date) {
+      const next = { date: entry.date };
+      if (typeof entry.reason === 'string' && entry.reason) {
+        next.reason = entry.reason;
+      }
+      byDate.set(entry.date, next);
+    }
+  }
+
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+export function blockedDateSet(blockedDates) {
+  return new Set(normalizeBlockedDates(blockedDates).map((e) => e.date));
+}
+
+export function blockedReasonMap(blockedDates) {
+  const map = new Map();
+  for (const entry of normalizeBlockedDates(blockedDates)) {
+    if (entry.reason) map.set(entry.date, entry.reason);
+  }
+  return map;
+}
+
 function ensureDb() {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -48,6 +83,14 @@ function ensureDb() {
     if (!Array.isArray(room.blockedDates)) {
       room.blockedDates = [];
       changed = true;
+    } else {
+      const normalized = normalizeBlockedDates(room.blockedDates);
+      const before = JSON.stringify(room.blockedDates);
+      const after = JSON.stringify(normalized);
+      if (before !== after) {
+        room.blockedDates = normalized;
+        changed = true;
+      }
     }
   }
 
