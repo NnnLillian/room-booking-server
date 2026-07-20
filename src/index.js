@@ -319,6 +319,32 @@ app.post('/api/bookings', guestAuthMiddleware, (req, res) => {
   res.status(201).json(booking);
 });
 
+/** 客人取消：仅本人 pending → cancelled */
+app.patch('/api/bookings/:id/cancel', guestAuthMiddleware, (req, res) => {
+  const { reason } = req.body || {};
+  const db = withExpiredBookings(readDb());
+  const booking = db.bookings.find((b) => b.id === req.params.id);
+  if (!booking) return res.status(404).json({ error: '订单不存在' });
+
+  if (booking.openid !== req.guest.openid) {
+    return res.status(403).json({ error: '无权操作该订单' });
+  }
+
+  if (booking.status !== 'pending') {
+    return res.status(409).json({
+      error: '仅待审核的申请可取消，请刷新行程后重试',
+    });
+  }
+
+  booking.status = 'cancelled';
+  const trimmed = typeof reason === 'string' ? reason.trim() : '';
+  booking.cancelReason = trimmed || undefined;
+  booking.updatedAt = new Date().toISOString();
+
+  writeDb(db);
+  res.json(enrichBooking(booking, db, true));
+});
+
 app.patch('/api/bookings/:id/status', adminAuthMiddleware, (req, res) => {
   const { status, rejectReason } = req.body;
   const allowed = ['approved', 'rejected', 'cancelled'];
@@ -336,6 +362,12 @@ app.patch('/api/bookings/:id/status', adminAuthMiddleware, (req, res) => {
   }
 
   if (status === 'approved') {
+    if (booking.status !== 'pending') {
+      return res.status(400).json({
+        error: '仅待审核订单可通过（可能客人已取消）',
+      });
+    }
+
     const checkInDate = parseDate(booking.checkIn);
     if (checkInDate && checkInDate < startOfToday()) {
       booking.status = 'expired';
@@ -359,6 +391,8 @@ app.patch('/api/bookings/:id/status', adminAuthMiddleware, (req, res) => {
         error: '入住日当天及之后不可拒绝已通过的订单',
       });
     }
+  } else if (status === 'rejected' && booking.status !== 'pending') {
+    return res.status(400).json({ error: '当前状态不可拒绝' });
   }
 
   booking.status = status;
