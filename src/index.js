@@ -349,6 +349,16 @@ app.patch('/api/bookings/:id/status', adminAuthMiddleware, (req, res) => {
     }
   }
 
+  // 已通过 → 拒绝：仅入住日当天之前允许（checkIn 须严格晚于今天）
+  if (status === 'rejected' && booking.status === 'approved') {
+    const checkInDate = parseDate(booking.checkIn);
+    if (!checkInDate || checkInDate <= startOfToday()) {
+      return res.status(400).json({
+        error: '入住日当天及之后不可拒绝已通过的订单',
+      });
+    }
+  }
+
   booking.status = status;
   booking.rejectReason = status === 'rejected' ? rejectReason || '房主已拒绝' : undefined;
   booking.updatedAt = new Date().toISOString();
