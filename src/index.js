@@ -115,9 +115,7 @@ app.post('/api/auth/wx', async (req, res) => {
         js_code: code,
         grant_type: 'authorization_code',
       });
-      const wxRes = await fetch(
-        `https://api.weixin.qq.com/sns/jscode2session?${params}`
-      );
+      const wxRes = await fetch(`https://api.weixin.qq.com/sns/jscode2session?${params}`);
       const data = await wxRes.json();
       if (data.errcode || !data.openid) {
         return res.status(401).json({ error: '微信登录失败', detail: data.errmsg });
@@ -148,42 +146,44 @@ app.get('/api/rooms/:id', (req, res) => {
 });
 
 app.get('/api/rooms/:id/availability', (req, res) => {
-  const { month } = req.query;
+  const { startDate, endDate } = req.query;
   const db = withExpiredBookings(readDb());
   const room = getRoomById(db, req.params.id);
   if (!room) return res.status(404).json({ error: '房间不存在' });
 
-  const { bookingDates, blocked, all: unavailable } = getUnavailableDates(room.id);
-  const availability = {};
-  const today = startOfToday();
-
-  if (month && /^\d{4}-\d{2}$/.test(month)) {
-    const [year, mon] = month.split('-').map(Number);
-    const daysInMonth = new Date(year, mon, 0).getDate();
-
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dateStr = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const date = parseDate(dateStr);
-      const isPast = date < today;
-      const reason = getDateReason(dateStr, bookingDates, blocked);
-      const isUnavailable = unavailable.has(dateStr);
-
-      availability[dateStr] = {
-        available: !isPast && !isUnavailable,
-        occupied: isUnavailable,
-        blocked: blocked.has(dateStr),
-        expired: isPast,
-        reason,
-      };
-    }
+  if (!startDate || !endDate) {
+    return res.status(400).json({ error: '请选择 入住日期 与 离开日期' });
   }
+
+  const start = parseDate(String(startDate));
+  const end = parseDate(String(endDate));
+  if (!start || !end || start >= end) {
+    return res.status(400).json({ error: '日期区间无效' });
+  }
+
+  const { bookingDates, blocked, all: unavailable } = getUnavailableDates(room.id);
+  const today = startOfToday();
+  const rangeDates = getDateRange(String(startDate), String(endDate));
+
+  const dates = rangeDates.map((dateStr) => {
+    const date = parseDate(dateStr);
+    const isPast = date < today;
+    const isUnavailable = unavailable.has(dateStr);
+    return {
+      date: dateStr,
+      available: !isPast && !isUnavailable,
+      occupied: isUnavailable,
+      blocked: blocked.has(dateStr),
+      expired: isPast,
+      reason: getDateReason(dateStr, bookingDates, blocked),
+    };
+  });
 
   res.json({
     roomId: room.id,
-    month: month || null,
-    availability,
-    blockedDates: [...blocked].sort(),
-    occupiedDates: [...unavailable].sort(),
+    startDate: String(startDate),
+    endDate: String(endDate),
+    dates,
   });
 });
 
