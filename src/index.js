@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
@@ -10,6 +11,7 @@ import {
   startOfToday,
   expirePastBookings,
 } from './utils.js';
+import { notifyBookingStatusChange } from './wxSubscribe.js';
 
 const app = express();
 const PORT = process.env.PORT || 9876;
@@ -365,6 +367,13 @@ app.patch('/api/bookings/:id/status', adminAuthMiddleware, (req, res) => {
 
   writeDb(db);
   res.json(enrichBooking(booking, db, false));
+
+  // 尽最大努力发订阅消息；失败不影响本次审核结果
+  void notifyBookingStatusChange({
+    booking,
+    status,
+    mockWx: DEV_MOCK_WX,
+  });
 });
 
 // --- Admin Auth ---
