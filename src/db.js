@@ -6,9 +6,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../data');
 const DB_FILE = path.join(DATA_DIR, 'store.json');
 
-export const ITEM_POOL_MAX_ITEMS = 50;
-export const ITEM_POOL_MAX_NAME_LENGTH = 40;
-export const DRAWN_ITEM_NAME_MAX_LENGTH = 40;
+export const GUEST_OFFERS_MAX_ITEMS = 50;
+export const GUEST_OFFERS_MAX_NAME_LENGTH = 40;
+export const DRAWN_OFFER_NAME_MAX_LENGTH = 40;
 
 const DEFAULT_DATA = {
   rooms: [
@@ -19,7 +19,7 @@ const DEFAULT_DATA = {
       area: '四川省 · 成都市',
       fullAddress: '四川省成都市成华区 朗诗·绿色街区 7号楼 1单元 305',
       blockedDates: [],
-      itemPool: [],
+      guestOffers: [],
     },
   ],
   bookings: [],
@@ -30,16 +30,16 @@ const DEFAULT_DATA = {
 };
 
 /** Normalize to trimmed non-empty strings; cap length and count. */
-export function normalizeItemPool(itemPool) {
-  if (!Array.isArray(itemPool)) return [];
+export function normalizeGuestOffers(guestOffers) {
+  if (!Array.isArray(guestOffers)) return [];
 
   const out = [];
-  for (const entry of itemPool) {
+  for (const entry of guestOffers) {
     if (typeof entry !== 'string') continue;
     const trimmed = entry.trim();
     if (!trimmed) continue;
-    out.push(trimmed.slice(0, ITEM_POOL_MAX_NAME_LENGTH));
-    if (out.length >= ITEM_POOL_MAX_ITEMS) break;
+    out.push(trimmed.slice(0, GUEST_OFFERS_MAX_NAME_LENGTH));
+    if (out.length >= GUEST_OFFERS_MAX_ITEMS) break;
   }
   return out;
 }
@@ -113,9 +113,33 @@ function ensureDb() {
       }
     }
 
-    const normalizedPool = normalizeItemPool(room.itemPool);
-    if (!Array.isArray(room.itemPool) || JSON.stringify(room.itemPool) !== JSON.stringify(normalizedPool)) {
-      room.itemPool = normalizedPool;
+    // Migrate legacy itemPool → guestOffers
+    if (room.itemPool !== undefined && room.guestOffers === undefined) {
+      room.guestOffers = room.itemPool;
+      delete room.itemPool;
+      changed = true;
+    } else if (room.itemPool !== undefined) {
+      delete room.itemPool;
+      changed = true;
+    }
+
+    const normalizedOffers = normalizeGuestOffers(room.guestOffers);
+    if (
+      !Array.isArray(room.guestOffers) ||
+      JSON.stringify(room.guestOffers) !== JSON.stringify(normalizedOffers)
+    ) {
+      room.guestOffers = normalizedOffers;
+      changed = true;
+    }
+  }
+
+  for (const booking of data.bookings || []) {
+    if (booking.drawnItemName !== undefined && booking.drawnOfferName === undefined) {
+      booking.drawnOfferName = booking.drawnItemName;
+      delete booking.drawnItemName;
+      changed = true;
+    } else if (booking.drawnItemName !== undefined) {
+      delete booking.drawnItemName;
       changed = true;
     }
   }
