@@ -6,6 +6,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../data');
 const DB_FILE = path.join(DATA_DIR, 'store.json');
 
+export const ITEM_POOL_MAX_ITEMS = 50;
+export const ITEM_POOL_MAX_NAME_LENGTH = 40;
+export const DRAWN_ITEM_NAME_MAX_LENGTH = 40;
+
 const DEFAULT_DATA = {
   rooms: [
     {
@@ -15,6 +19,7 @@ const DEFAULT_DATA = {
       area: '四川省 · 成都市',
       fullAddress: '四川省成都市成华区 朗诗·绿色街区 7号楼 1单元 305',
       blockedDates: [],
+      itemPool: [],
     },
   ],
   bookings: [],
@@ -23,6 +28,21 @@ const DEFAULT_DATA = {
     password: 'admin123',
   },
 };
+
+/** Normalize to trimmed non-empty strings; cap length and count. */
+export function normalizeItemPool(itemPool) {
+  if (!Array.isArray(itemPool)) return [];
+
+  const out = [];
+  for (const entry of itemPool) {
+    if (typeof entry !== 'string') continue;
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    out.push(trimmed.slice(0, ITEM_POOL_MAX_NAME_LENGTH));
+    if (out.length >= ITEM_POOL_MAX_ITEMS) break;
+  }
+  return out;
+}
 
 /** Normalize legacy `string[]` or mixed entries to `{ date, reason? }[]`. */
 export function normalizeBlockedDates(blockedDates) {
@@ -91,6 +111,12 @@ function ensureDb() {
         room.blockedDates = normalized;
         changed = true;
       }
+    }
+
+    const normalizedPool = normalizeItemPool(room.itemPool);
+    if (!Array.isArray(room.itemPool) || JSON.stringify(room.itemPool) !== JSON.stringify(normalizedPool)) {
+      room.itemPool = normalizedPool;
+      changed = true;
     }
   }
 

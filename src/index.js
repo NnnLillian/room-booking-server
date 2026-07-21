@@ -9,8 +9,12 @@ import {
   getRoomById,
   sanitizeRoom,
   normalizeBlockedDates,
+  normalizeItemPool,
   blockedDateSet,
   blockedReasonMap,
+  ITEM_POOL_MAX_ITEMS,
+  ITEM_POOL_MAX_NAME_LENGTH,
+  DRAWN_ITEM_NAME_MAX_LENGTH,
 } from './db.js';
 import {
   getDateRange,
@@ -279,6 +283,50 @@ app.delete('/api/rooms/:id/blocked-dates', adminAuthMiddleware, (req, res) => {
   res.json({ roomId: room.id, blockedDates: room.blockedDates });
 });
 
+app.get('/api/rooms/:id/item-pool', adminAuthMiddleware, (req, res) => {
+  const db = readDb();
+  const room = getRoomById(db, req.params.id);
+  if (!room) return res.status(404).json({ error: '房间不存在' });
+  res.json({
+    roomId: room.id,
+    itemPool: normalizeItemPool(room.itemPool),
+  });
+});
+
+app.put('/api/rooms/:id/item-pool', adminAuthMiddleware, (req, res) => {
+  const { itemPool } = req.body || {};
+  if (!Array.isArray(itemPool)) {
+    return res.status(400).json({ error: 'itemPool 必须是数组' });
+  }
+  if (itemPool.length > ITEM_POOL_MAX_ITEMS) {
+    return res.status(400).json({ error: `物品池最多 ${ITEM_POOL_MAX_ITEMS} 项` });
+  }
+
+  const normalized = [];
+  for (const entry of itemPool) {
+    if (typeof entry !== 'string') {
+      return res.status(400).json({ error: '每一项必须是字符串' });
+    }
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    if (trimmed.length > ITEM_POOL_MAX_NAME_LENGTH) {
+      return res.status(400).json({
+        error: `单项名称不超过 ${ITEM_POOL_MAX_NAME_LENGTH} 字`,
+      });
+    }
+    normalized.push(trimmed);
+  }
+
+  const db = readDb();
+  const room = getRoomById(db, req.params.id);
+  if (!room) return res.status(404).json({ error: '房间不存在' });
+
+  room.itemPool = normalized;
+  writeDb(db);
+
+  res.json({ roomId: room.id, itemPool: room.itemPool });
+});
+
 // --- Bookings ---
 
 app.get('/api/bookings', (req, res) => {
@@ -306,7 +354,7 @@ app.get('/api/bookings', (req, res) => {
 });
 
 app.post('/api/bookings', guestAuthMiddleware, (req, res) => {
-  const { roomId, checkIn, checkOut, guestName, guestPhone, remark } = req.body;
+  const { roomId, checkIn, checkOut, guestName, guestPhone, remark, drawnItemName } = req.body;
 
   if (!roomId || !checkIn || !checkOut || !guestName || !guestPhone) {
     return res.status(400).json({ error: '请填写完整预订信息' });
@@ -320,6 +368,22 @@ app.post('/api/bookings', guestAuthMiddleware, (req, res) => {
 
   if (checkInDate < startOfToday()) {
     return res.status(400).json({ error: '今天之前的行程不能预订' });
+  }
+
+  let snapshotName;
+  if (drawnItemName !== undefined && drawnItemName !== null) {
+    if (typeof drawnItemName !== 'string') {
+      return res.status(400).json({ error: 'drawnItemName 必须是字符串' });
+    }
+    const trimmed = drawnItemName.trim();
+    if (trimmed) {
+      if (trimmed.length > DRAWN_ITEM_NAME_MAX_LENGTH) {
+        return res.status(400).json({
+          error: `drawnItemName 不超过 ${DRAWN_ITEM_NAME_MAX_LENGTH} 字`,
+        });
+      }
+      snapshotName = trimmed;
+    }
   }
 
   const db = withExpiredBookings(readDb());
@@ -351,6 +415,9 @@ app.post('/api/bookings', guestAuthMiddleware, (req, res) => {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+  if (snapshotName) {
+    booking.drawnItemName = snapshotName;
+  }
 
   db.bookings.push(booking);
   writeDb(db);
