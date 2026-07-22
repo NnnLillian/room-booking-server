@@ -332,14 +332,20 @@ app.put('/api/rooms/:id/guest-offers', adminAuthMiddleware, (req, res) => {
 app.get('/api/bookings', (req, res) => {
   const db = withExpiredBookings(readDb());
   const { openid, roomId, status } = req.query;
-  const guestToken = req.headers.authorization?.replace('Bearer ', '');
-  const isGuest = guestToken && guestSessions.has(guestToken);
-  const isAdmin = guestToken && adminSessions.has(guestToken);
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const isAdmin = Boolean(token && adminSessions.has(token));
+  const guest = token ? guestSessions.get(token) : undefined;
+  const isGuest = Boolean(guest);
+
+  // 必须登录：无效/过期 token 返回 401，避免会话丢失时静默返回全量申请
+  if (!isAdmin && !isGuest) {
+    return res.status(401).json({ error: '请先登录' });
+  }
 
   let bookings = [...db.bookings];
 
   if (isGuest && !isAdmin) {
-    bookings = bookings.filter((b) => b.openid === guestSessions.get(guestToken).openid);
+    bookings = bookings.filter((b) => b.openid === guest.openid);
   } else if (openid) {
     bookings = bookings.filter((b) => b.openid === openid);
   }
